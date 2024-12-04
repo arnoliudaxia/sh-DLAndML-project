@@ -22,20 +22,22 @@ with torch.no_grad():
         sub_dir_path = os.path.join(root_dir, sub_dir)
         if os.path.isdir(sub_dir_path):
             for file_name in os.listdir(sub_dir_path):
-                if file_name.endswith('.pkl') and 'latent' in file_name and '_tokenid' not in file_name:
+                # if file_name.endswith('.pkl') and 'latent' in file_name and '_tokenid' not in file_name:
+                if file_name.endswith('.pkl') and '_tokenEmbedding' not in file_name:
                     file_path = os.path.join(sub_dir_path, file_name)
                     with open(file_path, 'rb') as file:
                         loaded_data = pickle.load(file)
                     
                     tokenidsBatch=tokenizer( [d[1] for d in loaded_data], return_tensors="pt", padding=True)['input_ids']
+                    tokenEmbeddingBatch=model.get_input_embeddings()(tokenidsBatch.to(device)).cpu().to(torch.float32).numpy().squeeze()
                     # breakpoint()
-                    processed_data = [[eeg.cpu().numpy(), sen, latent.cpu().numpy(), tokenid.cpu().numpy()] 
-                                      for (eeg, sen, latent), tokenid in zip(loaded_data,tokenidsBatch )]  # 用于存储处理后的数据
+                    processed_data = [[eeg, sen, latent, tokenid.cpu().numpy(), embed] 
+                                      for (eeg, sen, latent, _), tokenid,embed in zip(loaded_data, tokenidsBatch, tokenEmbeddingBatch )]  # 用于存储处理后的数据
 
-                    
                     # 分离文件名和扩展名
                     base, ext = os.path.splitext(file_path)
-                    file_path=base+"_tokenid.pkl"
+                    # file_path=base+"_tokenid.pkl"
+                    file_path=base+"_tokenEmbedding.pkl"
                     
                     with open(file_path, 'wb') as output_file:
                         pickle.dump(processed_data, output_file)
