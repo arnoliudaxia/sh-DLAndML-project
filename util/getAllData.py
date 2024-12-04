@@ -12,7 +12,7 @@ for sub_dir in os.listdir(root_dir):
                 file_path = os.path.join(sub_dir_path, file_name)
                 with open(file_path, 'rb') as file:
                     loaded_data = pickle.load(file)
-                for  _, _, latent, tokenid in loaded_data:
+                for  eeg, character, latent, tokenid in loaded_data:
                     # latent.shape (1, 64)
                     # tokenid array([24])
                     pass
