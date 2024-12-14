@@ -27,6 +27,12 @@ PYTHONPATH=$(pwd) python Experiment/Dataset/autoencoder4EEG-inference.py
 | Model/dataloader.py           | PyTorch格式的Dataloader（注意过滤文件名） |
 | util                          | 包含一些（可能）有用的函数      |
 
+## 核心实验
+
+- `My/Experiment/Dataset` 涉及对于数据的一些处理算法
+- `My/Experiment/autoencoder4EEG.py` EEGencoder模型，用来获取一个低纬度的latent表示
+
+
 
 ## 总体思想（不用看）
 
