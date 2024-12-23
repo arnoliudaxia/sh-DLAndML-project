@@ -1,3 +1,4 @@
+import os
 import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
@@ -6,27 +7,29 @@ import numpy as np
 import wandb
 import argparse
 from sklearn.model_selection import train_test_split
-from My.Experiment.autoencoder4EEG import EEGAutoencoder
-from Model.dataloader import EEGDataset
+from My.Model.AutoEncoder.model import EEGAutoencoder
+from My.Model.dataloader import EEGDataset
 
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--epochs', type=int, default=200)
+parser.add_argument('--lr', type=float, default=1e-3)
 parser.add_argument('--batchSize', type=int, default=1024)
 parser.add_argument('--UseWandb', action='store_true') # 默认False
+parser.add_argument('--SaveModelPath', type=str) 
 args = parser.parse_args()
 print(args)
 
-
+os.makedirs(args.SaveModelPath, exist_ok=True)
 
 if args.UseWandb:
     wandb.init(
         # set the wandb project where this run will be logged
         project="EEG-project",
-        name="CharacterSplitTest",
+        name="CharacterSplit-SubSplit-mask8",
         # track hyperparameters and run metadata
         config={
-        "learning_rate": 1e-3,
+        "learning_rate": args.lr,
         "pipeline-dataprocess": "ChanelWiseWhiteAndCharacterSplit",
         "pipeline-EEGEncoder": 'autoEncoder',
         'batch-size':args.batchSize,
@@ -35,7 +38,7 @@ if args.UseWandb:
 
 # Load the dataset
 root_dir = '/home/arno/Projects/EEGDecodingTest/My/Data/qwen-characterSplit'  # Root directory containing the data folders (sub04, sub05, etc.)
-dataset = EEGDataset(root_dir=root_dir)
+dataset = EEGDataset(root_dir=root_dir,subjectMask=[8])
 # Split dataset into training and validation sets
 train_indices, val_indices = train_test_split(
     np.arange(len(dataset)), test_size=0.2, random_state=42
@@ -53,7 +56,7 @@ if args.UseWandb:
     wandb.watch(model)
 # Define Loss Function and Optimizer
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=1e-3)
+optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
 # Step 3: Training Loop with Validation
 num_epochs = args.epochs
@@ -92,14 +95,5 @@ for epoch in range(num_epochs):
     # Save the best model
     if val_loss < best_val_loss:
         best_val_loss = val_loss
-        torch.save(model.state_dict(), "best_eeg_autoencoder_{epoch}.pth")
+        torch.save(model.state_dict(), f"{args.SaveModelPath}/best_eeg_autoencoder_{epoch}.pth")
         print("Saved best model with validation loss: {:.4f}".format(best_val_loss))
-
-# Save the model and optimizer states
-# torch.save({
-#     'model_state_dict': model.state_dict(),
-#     'optimizer_state_dict': optimizer.state_dict(),
-#     'epoch': epoch,
-#     'loss': epoch_loss
-# }, "eeg_autoencoder_checkpoint.pth")
-# print("Checkpoint saved.")

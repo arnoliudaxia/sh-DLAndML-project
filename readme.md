@@ -30,8 +30,17 @@ PYTHONPATH=$(pwd) python Experiment/Dataset/autoencoder4EEG-inference.py
 ## 核心实验
 
 - `My/Experiment/Dataset` 涉及对于数据的一些处理算法
-- `My/Experiment/autoencoder4EEG.py` EEGencoder模型，用来获取一个低纬度的latent表示
+- `My/Experiment/AutoEncoder/autoencoder4EEG.py` EEGencoder模型，用来获取一个低纬度的latent表示
 
+训练autoencoder
+```
+PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSize 4096 --SaveModelPath My/Model/AutoEncoder --UseWandb
+```
+
+使用训练好的autoencoder在test subjet上inference
+```
+PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path <Trained Model Path>
+```
 
 
 ## 总体思想（不用看）

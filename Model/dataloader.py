@@ -3,16 +3,23 @@ import pickle
 import torch
 from torch.utils.data import Dataset
 import torch.nn as nn
+from typing import Optional
 
 # Step 1: Define the EEG Dataset
 class EEGDataset(Dataset):
-    def __init__(self, root_dir, target_length=256):
+    def __init__(self, root_dir, target_length=256, subjectMask: Optional[list] = None): # subjectMask跳过这个list中的subject数据，格式是纯数字
         self.data_files = []
         self.target_length = target_length
-        self.load_data(root_dir)
+        self.load_data(root_dir,subjectMask)
 
-    def load_data(self, root_dir):
+    def load_data(self, root_dir, subjectMask: Optional[list] = None):
         for sub_dir in os.listdir(root_dir):
+           
+            if subjectMask is not None:
+                subject= int(sub_dir[-2:])
+                if subject  in subjectMask:
+                    print(f"Skipping subject {subject}")
+                    continue
             sub_dir_path = os.path.join(root_dir, sub_dir)
             if os.path.isdir(sub_dir_path):
                 for file_name in os.listdir(sub_dir_path):

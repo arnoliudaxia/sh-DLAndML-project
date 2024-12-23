@@ -2,3 +2,4 @@ Data/
 LLM/
 wandb/
 __pycache__/
+*.pth
