@@ -1,14 +1,17 @@
+import argparse
 import json
 import os
 import pickle
 import torch
 import itertools
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, random_split
 import numpy as np
 from sklearn.model_selection import train_test_split
+import wandb
 
-root_dir = '/media/dell/DATA/BoBo/sh-DLAndML-project-master/Data/qwen-characterSplit'
+
+root_dir = "My/Data/qwen-characterSplit"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
@@ -93,6 +96,7 @@ def load_data_for_subs(root_dir, test_subs):
         if os.path.isdir(sub_dir_path):
             # 判断当前子目录是否在测试集列表中
             is_test = sub_dir in test_subs
+            print(f"{sub_dir} is Test? {is_test}")
             for file_name in os.listdir(sub_dir_path):
                 # 过滤出符合条件的.pkl文件
                 if (file_name.endswith('.pkl') and 'latent' in file_name 
@@ -182,28 +186,7 @@ class LatentToEmbedModel(nn.Module):
         
     #     return out
 
-def train(model, dataloader, criterion, optimizer, epochs=1000):
-    model.train()
-    for epoch in range(1, epochs + 1):
-        epoch_loss = 0.0
-        for batch_latent, batch_embed in dataloader:
-            batch_latent = batch_latent.to(device)
-            batch_embed = batch_embed.to(device)
-            
-            # 前向传播
-            outputs = model(batch_latent)
-            loss = criterion(outputs, batch_embed)
-            
-            # 反向传播和优化
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            epoch_loss += loss.item() * batch_latent.size(0)
-        
-        epoch_loss /= len(dataloader.dataset)
-        if epoch % 1 == 0:
-            print(f'Epoch [{epoch}/{epochs}], Loss: {epoch_loss}')
+
 
 def evaluate(model, dataloader, criterion):
     model.eval()
@@ -219,48 +202,41 @@ def evaluate(model, dataloader, criterion):
     return total_loss
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--lr', type=float, default=1e-5)
+    parser.add_argument('--SaveModelPath', type=str) 
+    parser.add_argument('--UseWandb', action='store_true') # 默认False
+    parser.add_argument('--batchSize', type=int, default=2048)
     
-    # print("Loading data...")
-    # latents, embeds = load_data(root_dir)
-    # print(f'Loaded {len(latents)} samples.')
-
-    # # 划分数据集为训练集和测试集
-    # X_train, X_test, y_train, y_test = train_test_split(latents, embeds, test_size=0.1, random_state=42)
-
-    # # 创建对应的 Dataset 和 DataLoader
-    # train_dataset = LatentEmbedDataset(X_train, y_train)
-    # test_dataset = LatentEmbedDataset(X_test, y_test)
-
-    # batch_size = 2048
-    # train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    # test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-    # # 初始化模型、损失函数和优化器
-    # model = LatentToEmbedLSTM().to(device)
-    # criterion = nn.MSELoss()
-    # optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    # # 仅在训练集上训练
-    # train(model, train_dataloader, criterion, optimizer, epochs=500)
-
-    # # 在测试集上评估
-    # test_loss = evaluate(model, test_dataloader, criterion)
-    # print(f'Test Loss: {test_loss}')
-
-    # # 保存模型
-    # torch.save(model.state_dict(), 'latent_to_embed_model_lstm.pth')
-    # print("Model saved as 'latent_to_embed_model_lstm.pth'")
-
-
+    args = parser.parse_args()
+    print(args)
+    batch_size = args.batchSize
+    
+    os.makedirs(args.SaveModelPath, exist_ok=True)
     print("Loading data...")
-
-    sub_dirs = os.listdir(root_dir)  # 获取所有子目录名称
-    batch_size = 2048
-    epochs = 500
+    if args.UseWandb:
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="EEG-project",
+            name="mask8-latent2Embedding",
+            # track hyperparameters and run metadata
+            config={
+            "learning_rate": args.lr,
+            "pipeline-dataprocess": "ChanelWiseWhiteAndCharacterSplit",
+            "pipeline-EEGEncoder": 'latent2Embedding',
+            'batch-size':args.batchSize,
+            }
+        )   
+    # sub_dirs = os.listdir(root_dir)  # 获取所有子目录名称
+    sub_dirs = [["sub08"]]
+    epochs = 100
     results = {}  # 用于记录测试结果
+    
 
     # 生成所有可能的3个子目录组合
-    test_combinations = list(itertools.combinations(sub_dirs, 3))
+    # test_combinations = list(itertools.combinations(sub_dirs, 3))
+    test_combinations=sub_dirs
     total_combinations = len(test_combinations)
     print(f"Total test combinations: {total_combinations}")
 
@@ -281,30 +257,81 @@ if __name__ == '__main__':
 
         train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        # Set up DataLoader for training and validation splits
+        val_split = 0.1  # 10% of the training data will be used for validation
+        val_size = int(len(train_dataset) * val_split)
+        train_size = len(train_dataset) - val_size
+
+        # Split the dataset into training and validation sets
+        train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
+
+        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
         # 初始化模型、损失函数和优化器
+        best_val_loss = float('inf')  # Track the best validation loss
         model = LatentToEmbedModel().to(device)
+        if args.UseWandb:
+            wandb.watch(model)
         criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-        # 仅在训练集上训练
+        # Train the model with a validation set
         print(f"Training the model with '{test_subs_str}' as the test set...")
-        train(model, train_dataloader, criterion, optimizer, epochs=epochs)
+        model.train()
+        for epoch in range(1, epochs + 1):
+            epoch_loss = 0.0
+            val_loss = 0.0
+            # Training loop
+            for batch_latent, batch_embed in train_dataloader:
+                batch_latent = batch_latent.to(device)
+                batch_embed = batch_embed.to(device)
 
-        # 在测试集上评估
-        test_loss = evaluate(model, test_dataloader, criterion)
-        print(f"Test Loss for '{test_subs_str}': {test_loss}")
+                # Forward pass
+                outputs = model(batch_latent)
+                loss = criterion(outputs, batch_embed)
 
-        # 保存模型（带上测试集名称）
-        model_save_path = f'latent_to_embed_model_{test_subs_str}.pth'
-        torch.save(model.state_dict(), model_save_path)
-        print(f"Model saved as '{model_save_path}'")
+                # Backward pass and optimization
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-        # 将测试结果记录到字典中
-        results[test_subs_str] = test_loss
+                epoch_loss += loss.item() * batch_latent.size(0)
 
-    # 将结果保存到 JSON 文件
-    results_file = 'test_results.json'
-    with open(results_file, 'w') as file:
-        json.dump(results, file, indent=4)
-    print(f"All results saved to '{results_file}'")
+            epoch_loss /= len(train_dataloader.dataset)
+
+            # Validation loop
+            model.eval()
+            with torch.no_grad():
+                for batch_latent, batch_embed in val_dataloader:
+                    batch_latent = batch_latent.to(device)
+                    batch_embed = batch_embed.to(device)
+
+                    outputs = model(batch_latent)
+                    loss = criterion(outputs, batch_embed)
+
+                    val_loss += loss.item() * batch_latent.size(0)
+
+            val_loss /= len(val_dataloader.dataset)
+
+            # Evaluate on the test set
+            test_loss = evaluate(model, test_dataloader, criterion)
+
+            # print(f'Epoch [{epoch}/{epochs}], Train Loss: {epoch_loss}, Validation Loss: {val_loss}, Test Loss for {test_subs_str}: {test_loss}')
+            print(f'Epoch [{epoch}/{epochs}], '
+                        f'Train Loss: {epoch_loss:.3e}, '
+                        f'Validation Loss: {val_loss:.3e}, '
+                        f'Test Loss for {test_subs_str}: {test_loss:.3e}')
+
+            # Log losses to wandb if using it
+            if args.UseWandb:
+                wandb.log({'train_loss': epoch_loss, 'val_loss': val_loss})
+            # Save the best model
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                model_save_path = f'{args.SaveModelPath}/latent_to_embed_model_{test_subs_str}.pth'
+                torch.save(model.state_dict(), model_save_path)
+                print("Saved best model with validation loss: {:.4f}".format(best_val_loss))
+                
+

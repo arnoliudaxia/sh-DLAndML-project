@@ -1,3 +1,4 @@
+# 从指定目录读取EEG数据和文本数据，对文本进行符号清理并根据字符数量切分EEG数据，最后将处理后的数据保存到新的目录中。
 import os
 import pickle
 import re

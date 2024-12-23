@@ -13,10 +13,11 @@ from My.Model.dataloader import EEGDataset
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--epochs', type=int, default=200)
-parser.add_argument('--lr', type=float, default=1e-3)
+parser.add_argument('--lr', type=float, default=1e-3) # 如果mask多个 1e-3 不能4
 parser.add_argument('--batchSize', type=int, default=1024)
 parser.add_argument('--UseWandb', action='store_true') # 默认False
-parser.add_argument('--SaveModelPath', type=str) 
+parser.add_argument('--SaveModelPath', type=str)
+parser.add_argument('--mask', type=int, nargs='+', help="Mask掉的subject（不用做训练）")
 args = parser.parse_args()
 print(args)
 
@@ -26,7 +27,7 @@ if args.UseWandb:
     wandb.init(
         # set the wandb project where this run will be logged
         project="EEG-project",
-        name="CharacterSplit-SubSplit-mask8",
+        name=f"AutoEncoder-mask{'_'.join(map(str, args.mask))}", # ! 实验名称
         # track hyperparameters and run metadata
         config={
         "learning_rate": args.lr,
@@ -38,7 +39,7 @@ if args.UseWandb:
 
 # Load the dataset
 root_dir = '/home/arno/Projects/EEGDecodingTest/My/Data/qwen-characterSplit'  # Root directory containing the data folders (sub04, sub05, etc.)
-dataset = EEGDataset(root_dir=root_dir,subjectMask=[8])
+dataset = EEGDataset(root_dir=root_dir,subjectMask=args.mask) 
 # Split dataset into training and validation sets
 train_indices, val_indices = train_test_split(
     np.arange(len(dataset)), test_size=0.2, random_state=42
@@ -46,10 +47,10 @@ train_indices, val_indices = train_test_split(
 train_dataset = torch.utils.data.Subset(dataset, train_indices)
 val_dataset = torch.utils.data.Subset(dataset, val_indices)
 # Create DataLoaders for training and validation
-train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=args.batchSize, shuffle=True, num_workers = 8)
 val_loader = DataLoader(val_dataset, batch_size=args.batchSize, shuffle=False)
 
-dataloader = DataLoader(dataset, batch_size=args.batchSize, shuffle=True)
+# dataloader = DataLoader(dataset, batch_size=args.batchSize, shuffle=True)
 device = torch.device("cuda")
 model = EEGAutoencoder().to(device)
 if args.UseWandb:
@@ -96,4 +97,5 @@ for epoch in range(num_epochs):
     if val_loss < best_val_loss:
         best_val_loss = val_loss
         torch.save(model.state_dict(), f"{args.SaveModelPath}/best_eeg_autoencoder_{epoch}.pth")
+        torch.save(model.state_dict(), f"{args.SaveModelPath}/best_eeg_autoencoder.pth")
         print("Saved best model with validation loss: {:.4f}".format(best_val_loss))

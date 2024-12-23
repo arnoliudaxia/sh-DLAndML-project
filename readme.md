@@ -32,14 +32,24 @@ PYTHONPATH=$(pwd) python Experiment/Dataset/autoencoder4EEG-inference.py
 - `My/Experiment/Dataset` 涉及对于数据的一些处理算法
 - `My/Experiment/AutoEncoder/autoencoder4EEG.py` EEGencoder模型，用来获取一个低纬度的latent表示
 
+获取数据，注意修改
+```
+Chinese_reading_task_eeg_processing/data_preprocessing_and_alignment/align_eeg_with_sentence.py
+```
+
 训练autoencoder
 ```
-PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSize 4096 --SaveModelPath My/Model/AutoEncoder --UseWandb
+PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSize 4096 --SaveModelPath My/Model/AutoEncoder/mask8_12_6 --UseWandb --lr 1e-4 --mask 8 12 6
 ```
 
 使用训练好的autoencoder在test subjet上inference
 ```
 PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path <Trained Model Path>
+```
+
+使用autoencoder inference获取test subjet latent之后，训练 text embedding的映射 
+```
+ PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding  --lr 1e-4 --UseWandb
 ```
 
 
