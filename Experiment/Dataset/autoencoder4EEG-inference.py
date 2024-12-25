@@ -9,11 +9,13 @@ from torch import nn
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--model_path', type=str)
+parser.add_argument('--mask', type=int, nargs='+', help="Mask掉的subject（不用做训练）")
+parser.add_argument('--latentSize', type=int, default=64)
 args = parser.parse_args()
 print(args)
 
 device = torch.device("cuda")
-model = EEGAutoencoder(is_return_latent=True).to(device)
+model = EEGAutoencoder(is_return_latent=True, latent_dim=args.latentSize).to(device)
 
 # Load the checkpoint
 checkpoint = torch.load(args.model_path, weights_only=True)
@@ -24,8 +26,8 @@ model.eval()
 root_dir = '/home/arno/Projects/EEGDecodingTest/My/Data/qwen-characterSplit'
 with torch.no_grad():
     for sub_dir in os.listdir(root_dir):
-        if "8" not in sub_dir:
-            continue
+        # if all(item not in sub_dir for item in map(str, args.mask)):
+        #     continue
         sub_dir_path = os.path.join(root_dir, sub_dir)
         if os.path.isdir(sub_dir_path):
             for file_name in os.listdir(sub_dir_path):

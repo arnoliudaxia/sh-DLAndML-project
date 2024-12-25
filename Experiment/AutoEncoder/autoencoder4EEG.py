@@ -13,7 +13,8 @@ from My.Model.dataloader import EEGDataset
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--epochs', type=int, default=200)
-parser.add_argument('--lr', type=float, default=1e-3) # 如果mask多个 1e-3 不能4
+parser.add_argument('--latentSize', type=int, default=64)
+parser.add_argument('--lr', type=float, default=1e-3) 
 parser.add_argument('--batchSize', type=int, default=1024)
 parser.add_argument('--UseWandb', action='store_true') # 默认False
 parser.add_argument('--SaveModelPath', type=str)
@@ -27,7 +28,7 @@ if args.UseWandb:
     wandb.init(
         # set the wandb project where this run will be logged
         project="EEG-project",
-        name=f"AutoEncoder-mask{'_'.join(map(str, args.mask))}", # ! 实验名称
+        name=f"AutoEncoder-mask{'_'.join(map(str, args.mask))}-hidden2048", # ! 实验名称
         # track hyperparameters and run metadata
         config={
         "learning_rate": args.lr,
@@ -52,11 +53,14 @@ val_loader = DataLoader(val_dataset, batch_size=args.batchSize, shuffle=False)
 
 # dataloader = DataLoader(dataset, batch_size=args.batchSize, shuffle=True)
 device = torch.device("cuda")
-model = EEGAutoencoder().to(device)
-if args.UseWandb:
-    wandb.watch(model)
+
 # Define Loss Function and Optimizer
 criterion = nn.MSELoss()
+
+
+model = EEGAutoencoder(latent_dim=args.latentSize).to(device)
+if args.UseWandb:
+    wandb.watch(model)
 optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
 # Step 3: Training Loop with Validation
