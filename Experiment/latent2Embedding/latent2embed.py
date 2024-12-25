@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import pickle
+import torch.nn.functional as F
 import torch
 import itertools
 import torch.nn as nn
@@ -105,7 +106,19 @@ def euclidean_distance(tensor1, tensor2):
     distance =torch.sqrt(torch.sum(squared_diff, dim=-1))
     return distance
 
-
+class ContrastiveLoss(nn.Module):
+    def __init__(self, margin=1.0):
+        super(ContrastiveLoss, self).__init__()
+        self.margin = margin
+    
+    def forward(self, output1, output2, label):
+        # 计算欧几里得距离
+        euclidean_distance = F.pairwise_distance(output1, output2, keepdim=True)
+        
+        # 计算Contrastive Loss
+        loss = torch.mean((1 - label) * torch.pow(euclidean_distance, 2) + 
+                          (label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
+        return loss
 def evaluate(model, dataloader, criterion):
     model.eval()
     total_loss = 0.0
@@ -131,21 +144,163 @@ def evaluateMetric(model, dataloader, criterion):
 
     return torch.tensor(total_loss).mean().item()
 
+def create_labels(batch_embed):
+    # 计算Cosine相似度矩阵
+    # 使用归一化来计算Cosine相似度
+    norm_batch_embed = F.normalize(batch_embed, p=2, dim=1)  # 归一化每个样本向量
+    cosine_sim = torch.matmul(norm_batch_embed, norm_batch_embed.T)  # 计算相似度矩阵
+
+    # 将相似度矩阵与一个阈值（例如0.99）比较，决定正负样本对
+    labels = (cosine_sim > 0.99).float()  # 相似度大于阈值认为是正样本对
+
+    # 将对角线上的值设置为0，因为它们是自己与自己的比较
+    labels.fill_diagonal_(0)
+
+    return labels
+
+def train(args):
+    sub_dirs = [[f"sub{mask:02}" for mask in args.mask]] 
+    epochs = 200
+    batch_size=args.batchSize
+    if args.SaveModelPath is not None:
+        os.makedirs(args.SaveModelPath, exist_ok=True)
+
+    test_combinations=sub_dirs
+    test_subs=test_combinations[0]
+    test_subs_str = "_".join(test_subs)
+    print(f"\nProcessing with '{test_subs_str}' as the test set...")
+
+    # 加载数据，将三个子目录作为测试集
+    # train_latents, train_embeds, test_latents, test_embeds = load_data_for_subs(root_dir, test_subs)
+    # pickle.dump((train_latents, train_embeds, test_latents, test_embeds), open(f"MaskTrain-{test_subs_str}.pkl", "wb"))
+    train_latents, train_embeds, test_latents, test_embeds=pickle.load(open(f"MaskTrain-{test_subs_str}.pkl", "rb"))
+        
+    print(f"Training data: {len(train_latents)} samples")
+    print(f"Testing data: {len(test_latents)} samples")
+
+    # 创建对应的 Dataset 和 DataLoader
+    train_dataset = LatentEmbedDataset(train_latents, train_embeds)
+    test_dataset = LatentEmbedDataset(test_latents, test_embeds)
+
+    # Set up DataLoader for training and validation splits
+    val_split = 0.1  # 10% of the training data will be used for validation
+    val_size = int(len(train_dataset) * val_split)
+    train_size = len(train_dataset) - val_size
+
+    # Split the dataset into training and validation sets
+    train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
+
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    # 初始化模型、损失函数和优化器
+    best_val_loss = float('inf')  # Track the best validation loss
+    # model = LatentToEmbedModelLinear(input_dim=2048).to(device) # ! Model选择
+    model = LatentToEmbedModelMLP(input_dim=2048, hidden_dims=[args.fc_layer_size]*args.depthOfMLP).to(device) # ! Model选择
+    
+    if args.UseWandb:
+        wandb.watch(model)
+        
+    if args.LossType=="MSE":
+        criterion = nn.MSELoss()
+    elif args.LossType=="ContrastiveLoss":
+        criterion = ContrastiveLoss(margin=10.0)
+        # criterion = ContrastiveLoss(margin=0.8)
+    
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    # Train the model with a validation set
+    print(f"Training the model with '{test_subs_str}' as the test set...")
+    model.train()
+    for epoch in range(1, epochs + 1):
+        epoch_loss = 0.0
+        val_loss = 0.0
+        # Training loop
+        for batch_latent, batch_embed in train_dataloader:
+            batch_latent = batch_latent.to(device)
+            batch_embed = batch_embed.to(device)
+
+            # Forward pass
+            outputs = model(batch_latent)
+            if args.LossType=="MSE":
+                loss = criterion(outputs, batch_embed)
+            elif args.LossType=="ContrastiveLoss":
+                # 构造正负样本对： 这里我们假设每个batch中相同的`batch_embed`为正样本对，其他为负样本对
+                # label为0表示负样本对，1表示正样本对
+                labels = create_labels(batch_embed) 
+                # 计算损失
+                loss = criterion(outputs, batch_embed, labels)
+            # Backward pass and optimization
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            epoch_loss += loss.item() * batch_latent.size(0)
+
+        epoch_loss /= len(train_dataloader.dataset)
+
+        # Validation loop
+        model.eval()
+        with torch.no_grad():
+            for batch_latent, batch_embed in val_dataloader:
+                batch_latent = batch_latent.to(device)
+                batch_embed = batch_embed.to(device)
+
+                outputs = model(batch_latent)
+                # loss = criterion(outputs, batch_embed)
+                labels = create_labels(batch_embed) 
+                if args.LossType=="MSE":
+                    loss = criterion(outputs, batch_embed)
+                elif args.LossType=="ContrastiveLoss":
+                    loss = criterion(outputs, batch_embed, labels)
+
+                val_loss += loss.item() * batch_latent.size(0)
+
+        val_loss /= len(val_dataloader.dataset)
+        
+        
+        # Evaluate on the test set
+        test_euclidean_distance = evaluateMetric(model, test_dataloader, criterion)
+
+        # print(f'Epoch [{epoch}/{epochs}], Train Loss: {epoch_loss}, Validation Loss: {val_loss}, Test Loss for {test_subs_str}: {test_loss}')
+        print(f'Epoch [{epoch}/{epochs}], '
+                    f'Train Loss: {epoch_loss:.3e}, '
+                    f'Validation Loss: {val_loss:.3e}, '
+                    f'Test euclidean mean distance {test_subs_str}: {test_euclidean_distance:.3e}')
+        
+        # Log losses to wandb if using it
+        if args.UseWandb:
+            # wandb.log({'train_loss': epoch_loss, 'val_loss': val_loss})
+            wandb.log({'train_loss': epoch_loss, 'val_loss': val_loss, 'test_euclidean_distance': test_euclidean_distance})
+        # Save the best model
+        if args.SaveModelPath is not None and val_loss < best_val_loss:
+            best_val_loss = val_loss
+            model_save_path = f'{args.SaveModelPath}/latent_to_embed_model_{test_subs_str}.pth'
+            torch.save(model.state_dict(), model_save_path)
+            print("Saved best model with validation loss: {:.4f}".format(best_val_loss))
+            # if args.UseWandb:
+            #      wandb.run.summary['test_euclidean_distance'] = test_euclidean_distance
+            
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--lr', type=float, default=1e-4)
     parser.add_argument('--SaveModelPath', type=str, default=None) 
+    parser.add_argument('--LossType', type=str, default="MSE", help="loss的类型, [MSE, ContrastiveLoss]") 
     parser.add_argument('--UseWandb', action='store_true') # 默认False
     parser.add_argument('--batchSize', type=int, default=2048)
+    parser.add_argument('--depthOfMLP', type=int, default=2, help="MLP的隐藏层深度")
+    parser.add_argument('--fc_layer_size', type=int, default=2048, help="MLP的隐藏层宽度")
     parser.add_argument('--mask', type=int, nargs='+', help="Mask掉的subject（不用做训练）")
     
     args = parser.parse_args()
     print(args)
     batch_size = args.batchSize
     
-    if args.SaveModelPath is not None:
-        os.makedirs(args.SaveModelPath, exist_ok=True)
+
     print("Loading data...")
     if args.UseWandb:
         wandb.init(
@@ -158,116 +313,7 @@ if __name__ == '__main__':
             "pipeline-dataprocess": "ChanelWiseWhiteAndCharacterSplit",
             "pipeline-EEGEncoder": 'latent2Embedding',
             'batch-size':args.batchSize,
+            "loss":"ContrastiveLoss"
             }
         )   
-    # sub_dirs = os.listdir(root_dir)  # 获取所有子目录名称
-    sub_dirs = [[f"sub{mask:02}" for mask in args.mask]] 
-    epochs = 100
-    results = {}  # 用于记录测试结果
-    
-
-    # 生成所有可能的3个子目录组合
-    # test_combinations = list(itertools.combinations(sub_dirs, 3))
-    test_combinations=sub_dirs
-    total_combinations = len(test_combinations)
-    print(f"Total test combinations: {total_combinations}")
-
-    for idx, test_subs in enumerate(test_combinations, 1):
-        test_subs_str = "_".join(test_subs)
-        print(f"\nProcessing combination {idx}/{total_combinations} with '{test_subs_str}' as the test set...")
-
-        # 加载数据，将三个子目录作为测试集
-        train_latents, train_embeds, test_latents, test_embeds = load_data_for_subs(root_dir, test_subs)
-
-        # 打印数据集大小
-        print(f"Training data: {len(train_latents)} samples")
-        print(f"Testing data: {len(test_latents)} samples")
-
-        # 创建对应的 Dataset 和 DataLoader
-        train_dataset = LatentEmbedDataset(train_latents, train_embeds)
-        test_dataset = LatentEmbedDataset(test_latents, test_embeds)
-
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-        # Set up DataLoader for training and validation splits
-        val_split = 0.1  # 10% of the training data will be used for validation
-        val_size = int(len(train_dataset) * val_split)
-        train_size = len(train_dataset) - val_size
-
-        # Split the dataset into training and validation sets
-        train_dataset, val_dataset = random_split(train_dataset, [train_size, val_size])
-
-        train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-        # 初始化模型、损失函数和优化器
-        best_val_loss = float('inf')  # Track the best validation loss
-        # model = LatentToEmbedModelLinear(input_dim=2048).to(device) # ! Model选择
-        model = LatentToEmbedModelMLP(input_dim=2048, hidden_dims=[2048,2048]).to(device) # ! Model选择
-        
-        if args.UseWandb:
-            wandb.watch(model)
-        criterion = nn.MSELoss() # ! 改一下LOSS
-        # criterion = WeightedMSECosLoss(cos_weight=0.8)
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-
-        # Train the model with a validation set
-        print(f"Training the model with '{test_subs_str}' as the test set...")
-        model.train()
-        for epoch in range(1, epochs + 1):
-            epoch_loss = 0.0
-            val_loss = 0.0
-            # Training loop
-            for batch_latent, batch_embed in train_dataloader:
-                batch_latent = batch_latent.to(device)
-                batch_embed = batch_embed.to(device)
-
-                # Forward pass
-                outputs = model(batch_latent)
-                loss = criterion(outputs, batch_embed)
-
-                # Backward pass and optimization
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-
-                epoch_loss += loss.item() * batch_latent.size(0)
-
-            epoch_loss /= len(train_dataloader.dataset)
-
-            # Validation loop
-            model.eval()
-            with torch.no_grad():
-                for batch_latent, batch_embed in val_dataloader:
-                    batch_latent = batch_latent.to(device)
-                    batch_embed = batch_embed.to(device)
-
-                    outputs = model(batch_latent)
-                    loss = criterion(outputs, batch_embed)
-
-                    val_loss += loss.item() * batch_latent.size(0)
-
-            val_loss /= len(val_dataloader.dataset)
-            
-            
-            # Evaluate on the test set
-            test_euclidean_distance = evaluateMetric(model, test_dataloader, criterion)
-
-            # print(f'Epoch [{epoch}/{epochs}], Train Loss: {epoch_loss}, Validation Loss: {val_loss}, Test Loss for {test_subs_str}: {test_loss}')
-            print(f'Epoch [{epoch}/{epochs}], '
-                        f'Train Loss: {epoch_loss:.3e}, '
-                        f'Validation Loss: {val_loss:.3e}, '
-                        f'Test euclidean mean distance {test_subs_str}: {test_euclidean_distance:.3e}')
-           
-            # Log losses to wandb if using it
-            if args.UseWandb:
-                wandb.log({'train_loss': epoch_loss, 'val_loss': val_loss, 'test_euclidean_distance': test_euclidean_distance})
-            # Save the best model
-            if args.SaveModelPath is not None and val_loss < best_val_loss:
-                best_val_loss = val_loss
-                model_save_path = f'{args.SaveModelPath}/latent_to_embed_model_{test_subs_str}.pth'
-                torch.save(model.state_dict(), model_save_path)
-                print("Saved best model with validation loss: {:.4f}".format(best_val_loss))
-                
-
+    train(args)
