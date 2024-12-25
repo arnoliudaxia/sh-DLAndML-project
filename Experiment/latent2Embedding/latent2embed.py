@@ -11,7 +11,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import wandb
 from My.Model.latent2Embedding.LatentToEmbedModel import LatentToEmbedModelLinear, WeightedMSECosLoss, LatentToEmbedModelMLP
-
+from imblearn.under_sampling import RandomUnderSampler
+from sklearn.metrics.pairwise import cosine_similarity
 
 root_dir = "My/Data/qwen-characterSplit"
 
@@ -36,6 +37,7 @@ def load_data_for_subs(root_dir, test_subs):
     train_embeds = []
     test_latents = []
     test_embeds = []
+    characters=[]
     
     # 遍历根目录下的所有子目录
     for sub_dir in os.listdir(root_dir):
@@ -58,7 +60,7 @@ def load_data_for_subs(root_dir, test_subs):
                     
                     for data in loaded_data:
                         if len(data) >= 5:
-                            _, _, latent, tokenid, embed = data
+                            _, ch, latent, tokenid, embed = data
                             if embed.shape[0] != 3584:
                                 embed=embed[0,:]
                             if is_test:
@@ -67,7 +69,8 @@ def load_data_for_subs(root_dir, test_subs):
                             else:
                                 train_latents.append(latent.squeeze())
                                 train_embeds.append(embed)
-    return train_latents, train_embeds, test_latents, test_embeds
+                                characters.append(ch)
+    return train_latents, train_embeds, test_latents, test_embeds, characters
 
 class LatentEmbedDataset(Dataset):
     def __init__(self, latents, embeds):
@@ -119,6 +122,9 @@ class ContrastiveLoss(nn.Module):
         loss = torch.mean((1 - label) * torch.pow(euclidean_distance, 2) + 
                           (label) * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
         return loss
+
+def euclidean_distance_loss(predictions, targets):
+    return torch.sum((predictions - targets) ** 2)
 def evaluate(model, dataloader, criterion):
     model.eval()
     total_loss = 0.0
@@ -132,7 +138,7 @@ def evaluate(model, dataloader, criterion):
     total_loss /= len(dataloader.dataset)
     return total_loss
 
-def evaluateMetric(model, dataloader, criterion):
+def evaluateMetric(model, dataloader):
     model.eval()
     total_loss = []
     with torch.no_grad():
@@ -171,17 +177,42 @@ def train(args):
     print(f"\nProcessing with '{test_subs_str}' as the test set...")
 
     # 加载数据，将三个子目录作为测试集
-    # train_latents, train_embeds, test_latents, test_embeds = load_data_for_subs(root_dir, test_subs)
+    train_latents, train_embeds, test_latents, test_embeds, chs = load_data_for_subs(root_dir, test_subs)
     # pickle.dump((train_latents, train_embeds, test_latents, test_embeds), open(f"MaskTrain-{test_subs_str}.pkl", "wb"))
-    train_latents, train_embeds, test_latents, test_embeds=pickle.load(open(f"MaskTrain-{test_subs_str}.pkl", "rb"))
+    # train_latents, train_embeds, test_latents, test_embeds=pickle.load(open(f"MaskTrain-{test_subs_str}.pkl", "rb"))
         
-    print(f"Training data: {len(train_latents)} samples")
-    print(f"Testing data: {len(test_latents)} samples")
 
+    # 1. 创建标签映射字典
+    unique_labels = list(set(chs))  # 获取唯一标签
+    label_map = {label: idx for idx, label in enumerate(unique_labels)}  # 将标签映射到整数
+    # 2. 根据 chs 列表生成整数标签
+    integer_labels = [label_map[ch] for ch in chs]
+    
+    # 2. 使用RandomUnderSampler进行欠采样
+    X = np.array(train_latents )
+    y = np.array(integer_labels)
+
+    # 2. 使用RandomUnderSampler进行欠采样
+    undersampler = RandomUnderSampler(random_state=42)
+
+    # 对数据进行欠采样
+    X_resampled, y_resampled = undersampler.fit_resample(X, y)
+
+    # 3. 还原数据格式（train_latents 和 train_embeds）
+    train_latents_resampled = X_resampled
+    train_embeds_resampled = [train_embeds[i] for i in undersampler.sample_indices_]
+
+    print(f"Original number of samples: {len(train_latents)}")
+    print(f"Resampled number of samples: {len(train_latents_resampled)}")
+
+    train_latents=train_latents_resampled
+    train_embeds=train_embeds_resampled
+    
     # 创建对应的 Dataset 和 DataLoader
     train_dataset = LatentEmbedDataset(train_latents, train_embeds)
     test_dataset = LatentEmbedDataset(test_latents, test_embeds)
-
+    print(f"Training data: {len(train_latents)} samples")
+    print(f"Testing data: {len(test_latents)} samples")
     # Set up DataLoader for training and validation splits
     val_split = 0.1  # 10% of the training data will be used for validation
     val_size = int(len(train_dataset) * val_split)
@@ -205,11 +236,17 @@ def train(args):
     if args.LossType=="MSE":
         criterion = nn.MSELoss()
     elif args.LossType=="ContrastiveLoss":
-        criterion = ContrastiveLoss(margin=10.0)
+        print("Using ContrastiveLoss with margin=0.01")
+        criterion = ContrastiveLoss(margin=0.01)
+        # criterion = ContrastiveLoss(margin=0.1)
         # criterion = ContrastiveLoss(margin=0.8)
     
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # optimizer = torch.optim.SGD(model.parameters(), momentum=0.9, lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+    # 设置学习率调度器，监控验证集损失，当验证集损失不再改善时将学习率减少为原来的 0.1 倍
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5, factor=0.5, verbose=True)
+
     # optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
     # Train the model with a validation set
     print(f"Training the model with '{test_subs_str}' as the test set...")
@@ -232,6 +269,9 @@ def train(args):
                 labels = create_labels(batch_embed) 
                 # 计算损失
                 loss = criterion(outputs, batch_embed, labels)
+            elif args.LossType=="Euclidean":
+                loss = euclidean_distance_loss(outputs, batch_embed)
+            
             # Backward pass and optimization
             optimizer.zero_grad()
             loss.backward()
@@ -255,17 +295,21 @@ def train(args):
                     loss = criterion(outputs, batch_embed)
                 elif args.LossType=="ContrastiveLoss":
                     loss = criterion(outputs, batch_embed, labels)
+                elif args.LossType=="Euclidean":
+                    loss = euclidean_distance_loss(outputs, batch_embed)
 
                 val_loss += loss.item() * batch_latent.size(0)
 
         val_loss /= len(val_dataloader.dataset)
+        scheduler.step(val_loss)
         
         
         # Evaluate on the test set
-        test_euclidean_distance = evaluateMetric(model, test_dataloader, criterion)
+        test_euclidean_distance = evaluateMetric(model, test_dataloader)
 
         # print(f'Epoch [{epoch}/{epochs}], Train Loss: {epoch_loss}, Validation Loss: {val_loss}, Test Loss for {test_subs_str}: {test_loss}')
         print(f'Epoch [{epoch}/{epochs}], '
+             f"Learning Rate: {scheduler.optimizer.param_groups[0]['lr']}, "
                     f'Train Loss: {epoch_loss:.3e}, '
                     f'Validation Loss: {val_loss:.3e}, '
                     f'Test euclidean mean distance {test_subs_str}: {test_euclidean_distance:.3e}')
@@ -295,6 +339,7 @@ if __name__ == '__main__':
     parser.add_argument('--depthOfMLP', type=int, default=2, help="MLP的隐藏层深度")
     parser.add_argument('--fc_layer_size', type=int, default=2048, help="MLP的隐藏层宽度")
     parser.add_argument('--mask', type=int, nargs='+', help="Mask掉的subject（不用做训练）")
+    parser.add_argument('--note', type=str, default=None) 
     
     args = parser.parse_args()
     print(args)
@@ -306,7 +351,7 @@ if __name__ == '__main__':
         wandb.init(
             # set the wandb project where this run will be logged
             project="EEG-project",
-            name=f"mask{'_'.join(map(str, args.mask))}-hidden2048",
+            name=f"mask{'_'.join(map(str, args.mask))}-{args.note}",
             # track hyperparameters and run metadata
             config={
             "learning_rate": args.lr,
@@ -314,6 +359,7 @@ if __name__ == '__main__':
             "pipeline-EEGEncoder": 'latent2Embedding',
             'batch-size':args.batchSize,
             "loss":"ContrastiveLoss"
-            }
+            },
+            notes=args.note
         )   
     train(args)
