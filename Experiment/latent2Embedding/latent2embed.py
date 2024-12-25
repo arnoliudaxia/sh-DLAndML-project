@@ -9,67 +9,13 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import numpy as np
 from sklearn.model_selection import train_test_split
 import wandb
+from My.Model.latent2Embedding.LatentToEmbedModel import LatentToEmbedModelLinear, WeightedMSECosLoss, LatentToEmbedModelMLP
 
 
 root_dir = "My/Data/qwen-characterSplit"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'Using device: {device}')
-
-def load_data(root_dir):
-    latents = []
-    embeds = []
-    
-    for sub_dir in os.listdir(root_dir):
-        sub_dir_path = os.path.join(root_dir, sub_dir)
-        if os.path.isdir(sub_dir_path):
-            for file_name in os.listdir(sub_dir_path):
-                if (file_name.endswith('.pkl') and 'latent' in file_name 
-                    and '_tokenid' in file_name and '_tokenEmbedding' in file_name):
-                    file_path = os.path.join(sub_dir_path, file_name)
-                    with open(file_path, 'rb') as file:
-                        loaded_data = pickle.load(file)
-                    
-                    for data in loaded_data:
-
-                        if len(data) >= 5:
-                            _, _, latent, tokenid, embed = data
-
-                            if embed.shape[0] == 3584:
-                                latents.append(latent.squeeze())
-                                embeds.append(embed)
-    return latents, embeds
-
-
-def load_data_for_sub(root_dir, test_sub):
-    train_latents = []
-    train_embeds = []
-    test_latents = []
-    test_embeds = []
-    
-    for sub_dir in os.listdir(root_dir):
-        sub_dir_path = os.path.join(root_dir, sub_dir)
-        if os.path.isdir(sub_dir_path):
-            is_test = (sub_dir == test_sub)  # 当前目录是否为测试集
-            for file_name in os.listdir(sub_dir_path):
-                if (file_name.endswith('.pkl') and 'latent' in file_name 
-                    and '_tokenid' in file_name and '_tokenEmbedding' in file_name):
-                    file_path = os.path.join(sub_dir_path, file_name)
-                    with open(file_path, 'rb') as file:
-                        loaded_data = pickle.load(file)
-                    
-                    for data in loaded_data:
-                        if len(data) >= 5:
-                            _, _, latent, tokenid, embed = data
-                            if embed.shape[0] == 3584:
-                                if is_test:
-                                    test_latents.append(latent.squeeze())
-                                    test_embeds.append(embed)
-                                else:
-                                    train_latents.append(latent.squeeze())
-                                    train_embeds.append(embed)
-    return train_latents, train_embeds, test_latents, test_embeds
-
 
 def load_data_for_subs(root_dir, test_subs):
     """
@@ -112,14 +58,14 @@ def load_data_for_subs(root_dir, test_subs):
                     for data in loaded_data:
                         if len(data) >= 5:
                             _, _, latent, tokenid, embed = data
-                            if embed.shape[0] == 3584:
-                                if is_test:
-                                    test_latents.append(latent.squeeze())
-                                    test_embeds.append(embed)
-                                else:
-                                    train_latents.append(latent.squeeze())
-                                    train_embeds.append(embed)
-    
+                            if embed.shape[0] != 3584:
+                                embed=embed[0,:]
+                            if is_test:
+                                test_latents.append(latent.squeeze())
+                                test_embeds.append(embed)
+                            else:
+                                train_latents.append(latent.squeeze())
+                                train_embeds.append(embed)
     return train_latents, train_embeds, test_latents, test_embeds
 
 class LatentEmbedDataset(Dataset):
@@ -133,59 +79,31 @@ class LatentEmbedDataset(Dataset):
     def __getitem__(self, idx):
         return self.latents[idx], self.embeds[idx]
 
-# 定义神经网络模型
-class LatentToEmbedModel(nn.Module):
-    def __init__(self, input_dim=64, hidden_dims=[512, 1024, 2048], output_dim=3584):
-        super(LatentToEmbedModel, self).__init__()
-        layers = []
-        prev_dim = input_dim
-        for hidden_dim in hidden_dims:
-            layers.append(nn.Linear(prev_dim, hidden_dim))
-            layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(0.3))  # 防止过拟合
-            prev_dim = hidden_dim
-        layers.append(nn.Linear(prev_dim, output_dim))
-        self.model = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.model(x)
-    
-# class LatentToEmbedLSTM(nn.Module):
-#     def __init__(self, input_dim=64, hidden_dim=256, num_layers=2, output_dim=3584):
-#         super(LatentToEmbedLSTM, self).__init__()
-#         self.lstm = nn.LSTM(input_size=input_dim, hidden_size=hidden_dim, num_layers=num_layers, batch_first=True, dropout=0.3)
-#         self.fc = nn.Linear(hidden_dim, output_dim)
-        
-    # def forward(self, x):
-    #     # 打印输入形状以进行调试
-    #     # print(f"Input shape before adjustment: {x.shape}")
-        
-    #     # 检查输入维度并调整
-    #     if x.dim() == 2:
-    #         # 添加序列长度维度，假设序列长度为1
-    #         x = x.unsqueeze(1)  # 形状变为 (batch_size, 1, input_dim)
-    #         # print(f"Input shape after unsqueeze: {x.shape}")
-    #     elif x.dim() == 3:
-    #         # print(f"Input shape is already 3D: {x.shape}")
-    #         pass
-    #     else:
-    #         raise ValueError(f"Expected input to be 2D or 3D, but got {x.dim()}D")
-        
-    #     # 通过 LSTM 层
-    #     lstm_out, (h_n, c_n) = self.lstm(x)  # lstm_out 形状为 (batch_size, seq_length, hidden_dim)
-    #     # print(f"LSTM output shape: {lstm_out.shape}")
-        
-    #     # 获取最后一个时间步的输出
-    #     last_out = lstm_out[:, -1, :]  # 形状为 (batch_size, hidden_dim)
-    #     # print(f"Last output shape: {last_out.shape}")
-        
-    #     # 通过全连接层
-    #     out = self.fc(last_out)  # 形状为 (batch_size, output_dim)
-    #     # print(f"Output shape: {out.shape}")
-        
-    #     return out
 
+def euclidean_distance(tensor1, tensor2):
+    """
+    计算两个张量之间的欧几里得距离。
+    
+    参数:
+    - tensor1 (torch.Tensor): 第一个张量，形状为 (..., D)，其中 D 是特征维度。
+    - tensor2 (torch.Tensor): 第二个张量，形状为 (..., D)。
+    
+    返回:
+    - distance (torch.Tensor): 欧几里得距离，形状为 (...,)。
+    """
+    # 确保两个张量在相同设备上
+    # tensor1 = tensor1.to(tensor2.device)
+    if type(tensor1)!=torch.Tensor:
+        tensor1=torch.tensor(tensor1)
+        tensor2=torch.tensor(tensor2)
+    
+    # 计算平方差
+    diff = tensor1 - tensor2
+    squared_diff = diff ** 2
+    
+    # 求和并取平方根
+    distance =torch.sqrt(torch.sum(squared_diff, dim=-1))
+    return distance
 
 
 def evaluate(model, dataloader, criterion):
@@ -201,25 +119,39 @@ def evaluate(model, dataloader, criterion):
     total_loss /= len(dataloader.dataset)
     return total_loss
 
+def evaluateMetric(model, dataloader, criterion):
+    model.eval()
+    total_loss = []
+    with torch.no_grad():
+        for batch_latent, batch_embed in dataloader:
+            batch_latent = batch_latent.to(device)
+            batch_embed = batch_embed.to(device)
+            outputs = model(batch_latent)
+            total_loss.extend([euclidean_distance(outputs[i], batch_embed[i]) for i in range(len(batch_embed))])
+
+    return torch.tensor(total_loss).mean().item()
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--lr', type=float, default=1e-5)
-    parser.add_argument('--SaveModelPath', type=str) 
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--SaveModelPath', type=str, default=None) 
     parser.add_argument('--UseWandb', action='store_true') # 默认False
     parser.add_argument('--batchSize', type=int, default=2048)
+    parser.add_argument('--mask', type=int, nargs='+', help="Mask掉的subject（不用做训练）")
     
     args = parser.parse_args()
     print(args)
     batch_size = args.batchSize
     
-    os.makedirs(args.SaveModelPath, exist_ok=True)
+    if args.SaveModelPath is not None:
+        os.makedirs(args.SaveModelPath, exist_ok=True)
     print("Loading data...")
     if args.UseWandb:
         wandb.init(
             # set the wandb project where this run will be logged
             project="EEG-project",
-            name="mask8-latent2Embedding",
+            name=f"mask{'_'.join(map(str, args.mask))}-hidden2048",
             # track hyperparameters and run metadata
             config={
             "learning_rate": args.lr,
@@ -229,7 +161,7 @@ if __name__ == '__main__':
             }
         )   
     # sub_dirs = os.listdir(root_dir)  # 获取所有子目录名称
-    sub_dirs = [["sub08"]]
+    sub_dirs = [[f"sub{mask:02}" for mask in args.mask]] 
     epochs = 100
     results = {}  # 用于记录测试结果
     
@@ -271,10 +203,13 @@ if __name__ == '__main__':
 
         # 初始化模型、损失函数和优化器
         best_val_loss = float('inf')  # Track the best validation loss
-        model = LatentToEmbedModel().to(device)
+        # model = LatentToEmbedModelLinear(input_dim=2048).to(device) # ! Model选择
+        model = LatentToEmbedModelMLP(input_dim=2048, hidden_dims=[2048,2048]).to(device) # ! Model选择
+        
         if args.UseWandb:
             wandb.watch(model)
-        criterion = nn.MSELoss()
+        criterion = nn.MSELoss() # ! 改一下LOSS
+        # criterion = WeightedMSECosLoss(cos_weight=0.8)
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
         # Train the model with a validation set
@@ -314,21 +249,22 @@ if __name__ == '__main__':
                     val_loss += loss.item() * batch_latent.size(0)
 
             val_loss /= len(val_dataloader.dataset)
-
+            
+            
             # Evaluate on the test set
-            test_loss = evaluate(model, test_dataloader, criterion)
+            test_euclidean_distance = evaluateMetric(model, test_dataloader, criterion)
 
             # print(f'Epoch [{epoch}/{epochs}], Train Loss: {epoch_loss}, Validation Loss: {val_loss}, Test Loss for {test_subs_str}: {test_loss}')
             print(f'Epoch [{epoch}/{epochs}], '
                         f'Train Loss: {epoch_loss:.3e}, '
                         f'Validation Loss: {val_loss:.3e}, '
-                        f'Test Loss for {test_subs_str}: {test_loss:.3e}')
-
+                        f'Test euclidean mean distance {test_subs_str}: {test_euclidean_distance:.3e}')
+           
             # Log losses to wandb if using it
             if args.UseWandb:
-                wandb.log({'train_loss': epoch_loss, 'val_loss': val_loss})
+                wandb.log({'train_loss': epoch_loss, 'val_loss': val_loss, 'test_euclidean_distance': test_euclidean_distance})
             # Save the best model
-            if val_loss < best_val_loss:
+            if args.SaveModelPath is not None and val_loss < best_val_loss:
                 best_val_loss = val_loss
                 model_save_path = f'{args.SaveModelPath}/latent_to_embed_model_{test_subs_str}.pth'
                 torch.save(model.state_dict(), model_save_path)
