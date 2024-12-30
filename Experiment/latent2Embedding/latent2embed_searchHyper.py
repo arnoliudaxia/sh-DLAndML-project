@@ -12,7 +12,7 @@ sweep_config = {
     "method": "grid",
     "parameters": {
         "learning_rate": {
-            "values": [1e-4, 1e-5]
+            "values": [1e-3, 5e-4, 1e-4]
         },
         'fc_layer_size': {
             'values': [1024, 2048, 3096]
@@ -24,7 +24,7 @@ sweep_config = {
             'values': [2048, 4096]
         },
         "lossType":{
-            'values': ['MSE', 'ContrastiveLoss']
+            'values': ['MSE', 'ContrastiveLoss', 'Euclidean']
         }
     },
 }

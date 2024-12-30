@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 from sklearn.model_selection import train_test_split
-from latent2embed import LatentToEmbedModel
+from My.Experiment.latent2Embedding.latent2embed import LatentToEmbedModel
 from tqdm import tqdm
 
 root_dir = '/media/dell/DATA/BoBo/sh-DLAndML-project-master/Data/qwen-characterSplit'

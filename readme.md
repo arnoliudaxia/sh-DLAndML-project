@@ -24,7 +24,7 @@ PYTHONPATH=$(pwd) python Experiment/Dataset/autoencoder4EEG-inference.py
 |----------------------------------|---------------------------------|
 | readme.md                        | 说明文件                        |
 | Data/qwen-characterSplit/     | 数据集                          |
-| Model/dataloader.py           | PyTorch格式的Dataloader（注意过滤文件名） |
+| Model/dataloader.py           | PyTorch格式的Dataloader（可以通过mask去掉一些subject） |
 | util                          | 包含一些（可能）有用的函数      |
 
 ## 核心实验
@@ -44,13 +44,15 @@ PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSiz
 
 使用训练好的autoencoder在test subjet上inference
 ```
-PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path <Trained Model Path>
+PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path <Trained Model Path> --mask 12 6 8
 ```
 
 使用autoencoder inference获取test subjet latent之后，训练 text embedding的映射 
 ```
- PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding  --lr 1e-4 --UseWandb
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding  --lr 1e-4 --UseWandb
 ```
+
+使用 `My/Experiment/InsertEmbedding/embedingInsertQwen.ipynb` 将预测的EEG embedding插入到LLM中
 
 
 ## 总体思想（不用看）
