@@ -1,84 +1,161 @@
-# EEG decoding to language V0.1
+# The official implement of LLMs Help Alleviate the Cross-Subject Variability in Brain Signal and Language Alignment
 
-## 输入输出
+![Alt text](pipeline.png)
 
-原始数据集：人读好多句话。每一句话采集脑电信号，包含128通道，不定长度样本点。
+| [<img src="https://github.com/arnoliudaxia.png" width="100px;"/><br /><sub>arnoliudaxia</sub>](https://github.com/arnoliudaxia) | [<img src="https://github.com/SHTechBoBo.png" width="100px;"/><br /><sub>SHTechBoBo</sub>](https://github.com/SHTechBoBo) | [<img src="https://github.com/coding1daxia.png" width="100px;"/><br /><sub>Shuhang Li</sub>](https://github.com/coding1daxia) |
+|----------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------|
 
-1. 首先我将一句话按照字数切分，得到每个字和EEG信号对应。
-2. 然后我训练了一个EEG信号的autoencoder，将shape (128, t)的多通道信号压缩到(1,64)，得到和一个文字字对应的latent变量
-3. 然后我又利用qwen2-7b（阿里巴巴通义千问模型）的tokenizer，将文字字转化为token，得到最终的pairs (token, latent)，其中token的shape为(1,)，是一个数字；latent的shape为(1,64)，是一个向量。
 
-数据集文件类似于`Data/qwen-characterSplit/sub04/run_1_with_latent_tokenid.pkl`，读取的代码在`util/getAllData.py`中
+## Environmental setup
 
-输出：“重建出”一个中文字。
+```
+pip install -r requirements.txt
+```
 
-运行命令遵循下面的模式
+
+
+
+## Dataset
+
+You should prepare the dataset via the ChineseNeuro Symphony community (CHNNeuro) in Science Data Bank platform ([https://doi.org/10.57760/sciencedb.CHNNeuro.00007](https://doi.org/10.57760/sciencedb.CHNNeuro.00007)) or via Openneuro ([https://openneuro.org/datasets/ds004952](https://openneuro.org/datasets/ds004952)).**
+
+Because of copyright limitations, we cannot offer our processed data version here. Once you have downloaded the original dataset, you should use the processing script `Chinese_reading_task_eeg_processing/data_preprocessing_and_alignment/align_eeg_with_sentence.py` found at "https://github.com/arnoliudaxia/Chinese_reading_task_eeg_processing.git". Please note that we have made some modifications to the original processing code.
+
+## Input and Output
+
+Original Dataset: This dataset includes EEG signals collected as a person reads several sentences, with each sentence linked to EEG signals recorded across 128 channels with variable sample lengths.
+
+1. Initially, we divided each sentence by the number of characters to match each character with its corresponding EEG signal.
+2. We then trained an autoencoder for the EEG signals, compressing the multi-channel signals from shape (128, t) to (1, 64), resulting in a latent variable for each character.
+3. Subsequently, we utilized the tokenizer from qwen2-7b (Alibaba's Tongyi Qianwen model) to convert each character into a token, creating final pairs of (token, latent), where the token is shaped (1,) as a single number, and the latent is shaped (1, 64) as a vector.
+
+Dataset files are formatted like `Data/qwen-characterSplit/sub04/run_1_with_latent_tokenid.pkl`, with the reading code located in `util/getAllData.py`.
+
+Output: "Reconstruct" a Chinese character.
+
+## Directory Structure
+
+| Path                             | Description                     |
+|----------------------------------|---------------------------------|
+| readme.md                        | Documentation file              |
+| Data/qwen-characterSplit/        | Dataset                         |
+| Model/dataloader.py              | PyTorch Dataloader (allows masking of certain subjects) |
+| util                             | Contains some potentially useful functions |
+
+## Core Experiments
+
+To run the experiments, use the following command structure:
 
 ```
 PYTHONPATH=$(pwd) python Experiment/Dataset/autoencoder4EEG-inference.py
 ```
 
-## 结构目录
+- `My/Experiment/Dataset` includes algorithms for processing data.
+- `My/Experiment/AutoEncoder/autoencoder4EEG.py` is the EEGencoder model designed to extract a low-dimensional latent representation.
 
-| 路径                             | 说明                            |
-|----------------------------------|---------------------------------|
-| readme.md                        | 说明文件                        |
-| Data/qwen-characterSplit/     | 数据集                          |
-| Model/dataloader.py           | PyTorch格式的Dataloader（可以通过mask去掉一些subject） |
-| util                          | 包含一些（可能）有用的函数      |
-
-## 核心实验
-
-- `My/Experiment/Dataset` 涉及对于数据的一些处理算法
-- `My/Experiment/AutoEncoder/autoencoder4EEG.py` EEGencoder模型，用来获取一个低纬度的latent表示
-
-获取数据，注意修改
+For data acquisition, ensure to modify:
 ```
 Chinese_reading_task_eeg_processing/data_preprocessing_and_alignment/align_eeg_with_sentence.py
 ```
 
-训练autoencoder
+To train the autoencoder, execute:
 ```
 PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSize 4096 --SaveModelPath My/Model/AutoEncoder/mask8_12_6 --UseWandb --lr 1e-4 --mask 8 12 6
 ```
 
-使用训练好的autoencoder在test subjet上inference
+To perform inference on the test subject using the trained autoencoder, run:
 ```
 PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path <Trained Model Path> --mask 12 6 8
 ```
 
-使用autoencoder inference获取test subjet latent之后，训练 text embedding的映射 
+Once the latent variables for the test subject are obtained via autoencoder inference, train the text embedding mapping:
 ```
 PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding  --lr 1e-4 --UseWandb
 ```
 
-使用 `My/Experiment/InsertEmbedding/embedingInsertQwen.ipynb` 将预测的EEG embedding插入到LLM中
+Finally, use `My/Experiment/InsertEmbedding/embedingInsertQwen.ipynb` to integrate the predicted EEG embedding into the LLM.
+
+## Overall Concept
+
+1. **EEG Signal Preprocessing:**
+   - Begin by preprocessing the EEG data to filter out noise and enhance signal quality.
+   - Segment the EEG signals to ensure they align with the corresponding language stimuli, extracting features for each segment.
+
+2. **Mapping EEG to BERT Input Embedding Space:**
+   - Develop a deep neural network to map EEG features into the BERT input embedding space.
+   - Implement an encoder network to transform EEG features into dimensions compatible with BERT embeddings. This could involve a multilayer perceptron (MLP), or more advanced architectures like CNNs or RNNs to capture temporal patterns.
+
+3. **Loss Function Design:**
+   - Use cosine similarity loss to align EEG features with language embeddings in a similar vector space.
+   - Employ contrastive learning to ensure EEG features and BERT embeddings from the same stimulus are similar, while those from different stimuli are distinct.
+
+4. **Training Process:**
+   - Use paired data where each EEG segment corresponds to a language stimulus for supervised training, mapping EEG signals to the BERT embedding space.
+   - During training, input EEG signals, generate vectors through the network, and calculate their similarity with the corresponding BERT embeddings.
+
+5. **Language Decoding:**
+   - After training, input new EEG signals into the network to produce BERT embeddings.
+   - Use a BERT model or similar decoding mechanism to convert these embeddings back into text, identifying the most probable language stimuli.
+
+6. **Evaluation:**
+   - Assess the quality of language outputs using metrics like BLEU and ROUGE.
+   - Evaluate the mapping effectiveness of EEG signals to language embeddings using accuracy or similarity metrics.
 
 
-## 总体思想（不用看）
+## run history
 
-1. **EEG 信号预处理：** 
-   - 首先对 EEG 数据进行预处理，包括滤波、去除噪声等步骤，以提取高质量的信号。
-   - 接下来，将 EEG 信号分段，保证与对应语言刺激的数据同步，得到每个时间段的EEG特征。
+```
 
-2. **EEG 与 BERT 输入嵌入空间的映射：**
-   - 你需要构建一个深度神经网络模型，将 EEG 特征映射到 BERT 的输入嵌入空间。
-   - 使用一个编码器（Encoder）网络，学习将 EEG 信号特征编码到与 BERT 输入嵌入空间相匹配的维度。这可以是一个前馈神经网络（如多层感知机 MLP），或者更加复杂的结构，如卷积神经网络（CNN）或循环神经网络（RNN）来捕获时间依赖关系。
+--mask 8
 
-3. **损失函数设计：**
-   - 损失函数可以考虑使用余弦相似度（cosine similarity）损失，确保 EEG 特征与语言嵌入在相似的向量空间中。
-   - 你也可以利用对比学习（contrastive learning）的方式，确保来自相同语言刺激的 EEG 特征和 BERT 嵌入尽可能相似，而不同刺激的特征尽可能不同。
+PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSize 8192 --SaveModelPath My/Model/AutoEncoder/mask8 --UseWandb --mask 8
 
-4. **训练过程：**
-   - 需要有配对的数据，即每段 EEG 信号都有一个相应的语言刺激。你可以使用这种配对的数据来监督训练你的网络，将 EEG 信号学习到 BERT 的输入嵌入空间中。
-   - 在训练过程中，输入 EEG 信号，通过你的网络生成一个向量，然后计算这个向量与对应的 BERT 嵌入之间的相似性。
-
-5. **语言解码：**
-   - 一旦训练完成，可以将新录制的 EEG 信号输入到你的网络中，生成相应的 BERT 嵌入。
-   - 然后通过使用 BERT 模型（或其他解码机制）将这些嵌入转换回文本，生成最有可能的语言刺激。
-
-6. **评估：**
-   - 你可以通过 BLEU、ROUGE 等自然语言生成指标评估模型解码的语言输出的质量。
-   - 还可以使用分类准确率或相似性指标评估EEG信号与语言嵌入映射的效果。
+PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path My/Model/AutoEncoder/mask8/best_eeg_autoencoder.pth --mask 8 --latentSize 2048
 
 
+
+
+
+
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --mask 8 --LossType ContrastiveLoss --UseWandb --note Contrast欠采样学习率调度e3 --batchSize 4096 --lr 1e-3
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --mask 8 --LossType ContrastiveLoss --UseWandb --note Contrast欠采样学习率调度e4 --batchSize 4096 --lr 1e-4
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --mask 8  --UseWandb --note MSE欠采样学习率调度e3 --batchSize 4096 --lr 1e-3
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --mask 8  --LossType  Euclidean --UseWandb --note 欧几里得欠采样学习率调度e4 --batchSize 4096 --lr 1e-4
+
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --mask 8 --LossType ContrastiveLoss --batchSize 4096 --lr 1e-3
+
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding/MLP --mask 8 --UseWandb
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding/MLP --mask 8 --lr 1e-6 --UseWandb
+
+
+PYTHONPATH=$(pwd) python My/util/save_embed.py --model_path My/Model/latent2Embedding/latent_to_embed_model_sub08.pth --output_path My/Data/yhw/mask8 --mask 8
+
+
+PYTHONPATH=$(pwd) python My/util/save_embed.py --model_path My/Model/latent2Embedding/MLPAndContrastiveloss/latent_to_embed_model_sub08.pth --output_path My/Data/yhw/mask8 --mask 8
+
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed_searchHyper.py
+
+
+
+--mask 6 10 13 14
+
+6_10_13_14
+
+PYTHONPATH=$(pwd) python My/Experiment/AutoEncoder/autoencoder4EEG.py --batchSize 8192 --SaveModelPath My/Model/AutoEncoder/mask6_10_13_14 --UseWandb --mask 6 10 13 14
+
+PYTHONPATH=$(pwd) python My/Experiment/Dataset/autoencoder4EEG-inference.py --model_path My/Model/AutoEncoder/mask6_10_13_14/best_eeg_autoencoder.pth --mask 6 10 13 14
+
+
+PYTHONPATH=$(pwd) python My/Experiment/latent2Embedding/latent2embed.py --SaveModelPath My/Model/latent2Embedding --UseWandb --mask 6 10 13 14
+
+PYTHONPATH=$(pwd) python My/util/save_embed.py --model_path My/Model/latent2Embedding/latent_to_embed_model_sub08_sub12_sub06.pth --output_path My/Data/yhw/mask6_12_8 --mask 6 8 12
+
+```

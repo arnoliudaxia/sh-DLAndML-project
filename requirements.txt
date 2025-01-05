@@ -1,0 +1,17 @@
+egi_pynetstation==1.0.1
+flash_attn==2.7.2.post1
+imbalanced_learn==0.13.0
+matplotlib==3.10.0
+mne==1.6.0
+mne_bids==0.16.0
+numpy==2.2.1
+openpyxl==3.1.5
+psychopy==2024.2.4
+regex==2024.11.6
+scikit_learn==1.6.0
+scipy==1.15.0
+tiktoken==0.8.0
+tokenizers==0.21.0
+torch==2.5.1
+tqdm==4.67.0
+transformers==4.46.3
